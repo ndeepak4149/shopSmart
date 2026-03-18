@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+@layer components {
+  .btn-primary {
+    @apply bg-brand-600 hover:bg-brand-700 text-white font-semibold px-6 py-3 rounded-xl
+           transition-all duration-200 shadow-sm hover:shadow-md active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply bg-white hover:bg-slate-50 text-slate-700 font-semibold px-6 py-3 rounded-xl
+           border border-slate-200 transition-all duration-200 hover:border-slate-300 active:scale-95;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl border border-slate-100 shadow-card
+           hover:shadow-card-hover transition-all duration-300;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold;
+  }
+
+  .badge-top-pick {
+    @apply badge bg-gradient-to-r from-violet-500 to-indigo-500 text-white;
+  }
+
+  .badge-source {
+    @apply badge bg-slate-100 text-slate-600;
+  }
+
+  .input-search {
+    @apply w-full bg-white border border-slate-200 rounded-2xl px-5 py-4 text-slate-900
+           placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500
+           focus:border-transparent transition-all duration-200 text-base;
+  }
+
+  .section-title {
+    @apply text-xl font-bold text-slate-900 flex items-center gap-2;
+  }
+
+  .price-tag {
+    @apply text-2xl font-bold text-slate-900;
+  }
+
+  .price-tag-small {
+    @apply text-lg font-bold text-slate-900;
+  }
+}
+
+@layer utilities {
+  .text-balance { text-wrap: balance; }
+
+  .hero-glow {
+    background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,0.18) 0%, transparent 70%);
+  }
+
+  .glass {
+    backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+
+  .top-pick-glow {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3), 0 4px 20px rgba(99, 102, 241, 0.12);
+  }
+}
