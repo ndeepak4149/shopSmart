@@ -1,0 +1,24 @@
+# API Keys - NEVER commit these
+backend/.env
+frontend/.env.local
+
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# ML artifacts
+*.pkl
+*.joblib
+mlruns/
+
+# OS
+.DS_Store
