@@ -9,7 +9,7 @@ import { searchProducts } from "@/lib/api";
 import SearchBar from "@/components/SearchBar";
 import ResultCard from "@/components/ResultCard";
 
-// Mapbox must be loaded client-side only
+// Mapbox GL JS requires browser APIs — dynamic import with ssr:false prevents server-side errors
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
 function ResultsSkeleton() {
@@ -68,7 +68,7 @@ function ResultsContent() {
 
         {data && (
           <>
-            {/* Stats bar */}
+            {/* Summary bar: total result count and local store count */}
             <div className="flex items-center justify-between text-sm text-slate-500">
               <span>
                 <span className="font-semibold text-slate-900">{data.total_found}</span> results for{" "}
@@ -79,12 +79,12 @@ function ResultsContent() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
                   </svg>
-                  {data.local_stores.length} nearby stores on map
+                  {data.local_stores.length} stores within 50 miles
                 </span>
               )}
             </div>
 
-            {/* Top Picks */}
+            {/* AI-selected Top Picks section — up to 8 best matches highlighted */}
             {data.top_picks.length > 0 && (
               <section>
                 <h2 className="section-title mb-4">
@@ -104,7 +104,7 @@ function ResultsContent() {
               </section>
             )}
 
-            {/* Other Results */}
+            {/* All remaining results with a 'Show more' toggle after the first 6 */}
             {data.other_results.length > 0 && (
               <section>
                 <h2 className="section-title mb-4">
@@ -133,6 +133,75 @@ function ResultsContent() {
               </section>
             )}
 
+            {/* Scrollable list of nearby stores with distance, rating, and stock confidence */}
+            {data.local_stores.length > 0 && (
+              <section>
+                <h2 className="section-title mb-4">
+                  <span className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2">
+                      <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
+                    </svg>
+                  </span>
+                  Nearby Stores
+                  <span className="text-sm font-normal text-slate-400 ml-1">within 50 miles</span>
+                </h2>
+                <div className="space-y-2">
+                  {data.local_stores.map((store, i) => {
+                    const confColor: Record<string, string> = {
+                      high: "bg-green-100 text-green-700",
+                      medium: "bg-amber-100 text-amber-700",
+                      low: "bg-indigo-100 text-indigo-700",
+                      unknown: "bg-slate-100 text-slate-500",
+                    };
+                    const confLabel: Record<string, string> = {
+                      high: "Likely in stock",
+                      medium: "May be in stock",
+                      low: "Call ahead",
+                      unknown: "Unknown",
+                    };
+                    const distMi = store.distance_km != null
+                      ? (store.distance_km * 0.621371).toFixed(1) + " mi"
+                      : null;
+                    return (
+                      <div key={i} className="bg-white rounded-xl border border-slate-100 px-4 py-3 flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center flex-shrink-0">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2">
+                            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
+                          </svg>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-slate-800 text-sm truncate">{store.name}</p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {store.rating && (
+                              <span className="text-xs text-slate-500">⭐ {store.rating.toFixed(1)}</span>
+                            )}
+                            {distMi && (
+                              <span className="text-xs text-slate-400">{distMi}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${confColor[store.stock_confidence] || confColor.unknown}`}>
+                            {confLabel[store.stock_confidence] || "Unknown"}
+                          </span>
+                          {store.maps_url && (
+                            <a
+                              href={store.maps_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-indigo-600 hover:underline font-medium"
+                            >
+                              Directions ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
             {data.top_picks.length === 0 && data.other_results.length === 0 && (
               <div className="card p-12 text-center">
                 <p className="text-slate-500 text-lg font-medium">No results found</p>
@@ -143,9 +212,29 @@ function ResultsContent() {
         )}
       </div>
 
-      {/* Right: Map */}
+      {/* Right panel: sticky map — always visible so users can see local stores while scrolling results */}
       <div className="lg:w-[380px] xl:w-[440px] flex-shrink-0">
-        <div className="sticky top-6 h-[calc(100vh-120px)] rounded-2xl overflow-hidden bg-slate-100">
+        <div className="sticky top-6 h-[calc(100vh-120px)] rounded-2xl overflow-hidden bg-slate-100 flex flex-col">
+          {/* Overlay shown when no city/GPS is provided — prompts the user to add their location */}
+          {!city && !lat && !isLoading && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-50 rounded-2xl gap-3 p-6 text-center">
+              <div className="w-14 h-14 bg-brand-50 rounded-2xl flex items-center justify-center">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="1.5">
+                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
+                </svg>
+              </div>
+              <div>
+                <p className="font-semibold text-slate-800">Find nearby stores</p>
+                <p className="text-sm text-slate-500 mt-1">Search with a city name to see local stores on the map</p>
+              </div>
+              <Link
+                href={`/?q=${encodeURIComponent(query)}&prompt_city=1`}
+                className="mt-1 px-4 py-2 bg-brand-600 text-white text-sm font-semibold rounded-xl hover:bg-brand-700 transition-colors"
+              >
+                Add your city
+              </Link>
+            </div>
+          )}
           <MapView
             stores={data?.local_stores || []}
             centerLat={lat}

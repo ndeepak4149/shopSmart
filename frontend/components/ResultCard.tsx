@@ -9,16 +9,27 @@ interface ResultCardProps {
   query: string;
 }
 
+const CONDITION_CONFIG: Record<string, { label: string; style: string }> = {
+  refurbished: { label: "Refurbished",  style: "bg-purple-50 text-purple-700 border border-purple-100" },
+  open_box:    { label: "Open Box",     style: "bg-blue-50 text-blue-700 border border-blue-100" },
+  used:        { label: "Used",         style: "bg-amber-50 text-amber-700 border border-amber-100" },
+  parts:       { label: "Parts Only",   style: "bg-red-50 text-red-600 border border-red-100" },
+};
+
 const SOURCE_LABELS: Record<string, string> = {
   channel3: "Web",
   ebay: "eBay",
   google_places: "Local Store",
+  google_shopping: "Google Shopping",
+  web: "Web",
 };
 
 const SOURCE_COLORS: Record<string, string> = {
   channel3: "bg-blue-50 text-blue-700",
   ebay: "bg-amber-50 text-amber-700",
   google_places: "bg-green-50 text-green-700",
+  google_shopping: "bg-sky-50 text-sky-700",
+  web: "bg-slate-100 text-slate-600",
 };
 
 function StarRating({ rating }: { rating: number }) {
@@ -50,7 +61,7 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
       className={`card p-4 cursor-pointer group ${listing.is_top_pick ? "top-pick-glow border-brand-200" : ""}`}
     >
       <div className="flex gap-4">
-        {/* Image */}
+        {/* Product thumbnail — falls back to a placeholder icon if no image URL is available */}
         <div className="w-20 h-20 rounded-xl bg-slate-100 flex-shrink-0 overflow-hidden">
           {listing.image_url ? (
             <Image src={listing.image_url} alt={listing.title} width={80} height={80} className="w-full h-full object-contain p-1" unoptimized />
@@ -64,7 +75,7 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
           )}
         </div>
 
-        {/* Info */}
+        {/* Right-hand info column: badges, title, price, rating, and Top Pick reasoning */}
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -83,11 +94,20 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
                   Nearby
                 </span>
               )}
+              {listing.condition && listing.condition !== "new" && (() => {
+                const c = CONDITION_CONFIG[listing.condition];
+                return c ? (
+                  <span className={`badge ${c.style}`}>{c.label}</span>
+                ) : null;
+              })()}
             </div>
-            {/* Price */}
+            {/* Price display — shows 0 as 'Price in store' for local Google Places listings */}
             <div className="text-right flex-shrink-0">
               {listing.price > 0 ? (
-                <span className="text-xl font-bold text-slate-900">${listing.price.toFixed(2)}</span>
+                <>
+                  <span className="text-xl font-bold text-slate-900">${listing.price.toFixed(2)}</span>
+                  <p className="text-xs text-slate-400 mt-0.5">Price may vary</p>
+                </>
               ) : (
                 <span className="text-sm text-slate-500 font-medium">Price in store</span>
               )}
@@ -117,7 +137,7 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
             )}
           </div>
 
-          {/* Why this pick */}
+          {/* Ranking reason line — only shown for Top Picks so users understand why this result was selected */}
           {listing.is_top_pick && listing.reason && (
             <div className="mt-2 flex items-center gap-1 text-xs text-brand-600 font-medium">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

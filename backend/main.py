@@ -10,7 +10,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow the frontend (Next.js on port 3000) to talk to this backend
+# Allow the Next.js dev server on port 3000 to make cross-origin requests to this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -30,6 +30,8 @@ def health():
     return {"status": "ok", "env": settings.app_env}
 
 
-# ── Routes ────────────────────────────────────────────────────────
-from routes import search
+# Register route modules — each adds its own endpoints under /api/v1
+from routes import search, analyze, place
 app.include_router(search.router, prefix="/api/v1")
+app.include_router(analyze.router, prefix="/api/v1")
+app.include_router(place.router, prefix="/api/v1")

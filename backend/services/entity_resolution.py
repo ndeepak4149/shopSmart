@@ -41,8 +41,8 @@ class EntityResolver:
 
     def __init__(self):
         self.model = self.get_model()
-        self.threshold_exact = 0.70      # above this = same product
-        self.threshold_related = 0.45    # above this = related item
+        self.threshold_exact = 0.55      # above this = same product
+        self.threshold_related = 0.38    # above this = related item (accessory/variant)
 
     def resolve(
         self,

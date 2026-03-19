@@ -5,20 +5,20 @@ const POPULAR = ["iPhone 15 Pro", "Sony WH-1000XM5", "Nike Air Max", "MacBook Ai
 export default function HomePage() {
   return (
     <main className="min-h-screen bg-white">
-      {/* Hero */}
+      {/* Hero section: gradient background, headline, search bar, and popular search chips */}
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 hero-glow pointer-events-none" />
         <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-gradient-to-bl from-violet-100/60 to-transparent rounded-full -translate-y-1/2 translate-x-1/4 pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-gradient-to-tr from-indigo-100/40 to-transparent rounded-full translate-y-1/2 -translate-x-1/4 pointer-events-none" />
 
         <div className="relative max-w-4xl mx-auto px-6 pt-24 pb-20 flex flex-col items-center text-center">
-          {/* Badge */}
+          {/* 'AI-Powered' badge pill above the headline */}
           <div className="inline-flex items-center gap-2 bg-brand-50 text-brand-700 text-sm font-semibold px-4 py-2 rounded-full border border-brand-100 mb-8">
             <span className="w-2 h-2 rounded-full bg-brand-500 animate-pulse" />
             AI-Powered Price Intelligence
           </div>
 
-          {/* Headline */}
+          {/* Main headline with gradient accent on 'anywhere' */}
           <h1 className="text-5xl sm:text-6xl font-extrabold text-slate-900 tracking-tight leading-tight mb-6">
             Find the best price{" "}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-violet-600">
@@ -31,12 +31,12 @@ export default function HomePage() {
             Our AI predicts the real final price — no checkout surprises.
           </p>
 
-          {/* Search */}
+          {/* Search bar component — handles GPS + city input internally */}
           <div className="w-full max-w-xl">
             <SearchBar />
           </div>
 
-          {/* Popular searches */}
+          {/* Quick-search chip links for common product categories */}
           <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
             <span className="text-sm text-slate-400 mr-1">Popular:</span>
             {POPULAR.map((term) => (
@@ -52,7 +52,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Features */}
+      {/* Feature cards: three value props explaining what ShopSmart does */}
       <div className="max-w-5xl mx-auto px-6 py-20">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {[
@@ -98,7 +98,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Footer */}
+      {/* Minimal footer with copyright */}
       <footer className="border-t border-slate-100 py-8 text-center text-sm text-slate-400">
         © 2026 ShopSmart · Built with AI
       </footer>

@@ -3,7 +3,14 @@ from typing import Optional
 from services.search_pipeline import SearchPipeline
 
 router = APIRouter()
-pipeline = SearchPipeline()
+_pipeline = None  # SearchPipeline singleton — created on first request to avoid startup cost
+
+def get_pipeline():
+    # Lazy-initialize the pipeline so the ML model only trains once per process
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = SearchPipeline()
+    return _pipeline
 
 
 @router.get("/search")
@@ -13,19 +20,11 @@ async def search_products(
     lon: Optional[float] = Query(None, description="User longitude"),
     city: Optional[str] = Query(None, description="User city (if no GPS)"),
 ):
-    """
-    Main search endpoint.
-
-    Called by the frontend when user searches for a product.
-    Returns top picks + all results + local store map pins.
-
-    Example: GET /api/v1/search?q=Sony+headphones&city=Austin
-    """
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     try:
-        results = await pipeline.search(
+        results = await get_pipeline().search(
             query=q.strip(),
             lat=lat,
             lon=lon,

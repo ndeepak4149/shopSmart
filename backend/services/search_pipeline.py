@@ -1,20 +1,18 @@
 from typing import Optional
 from agents.discovery_agent import DiscoveryAgent, RawListing
-from services.entity_resolution import EntityResolver
 from services.ranking_engine import RankingEngine, RankedListing
 
 
 class SearchPipeline:
     """
     Orchestrates the full search flow:
-    Discovery → Entity Resolution → Ranking → Response
+    Discovery → Ranking → Response
 
     This is what gets called when a user searches for a product.
     """
 
     def __init__(self):
         self.discovery = DiscoveryAgent()
-        self.resolver = EntityResolver()
         self.ranker = RankingEngine()
 
     async def search(
@@ -29,12 +27,11 @@ class SearchPipeline:
 
         Flow:
         1. Discovery Agent searches all sources in parallel
-        2. Entity Resolver groups same products together
-        3. Ranking Engine picks the top 8 picks
-        4. Return structured response
+        2. Ranking Engine picks the top 8 picks
+        3. Return structured response
         """
 
-        # Step 1: Discover all listings from all sources
+        # Step 1: Fan out to all data sources (Channel3, SerpAPI, Google Places) simultaneously
         print(f"\n[Pipeline] Searching for: '{query}'")
         raw_listings = await self.discovery.search(
             query=query,
@@ -52,30 +49,24 @@ class SearchPipeline:
                 "total_found": 0,
             }
 
-        # Step 2: Separate local stores (map pins) from online listings
+        # Step 2: Split local store results from online listings — local stores go to the map panel
         local_stores = [l for l in raw_listings if l.is_local]
         online_listings = [l for l in raw_listings if not l.is_local]
 
-        # Step 3: Entity resolution on online listings only
-        resolved = self.resolver.resolve(query, online_listings)
-
-        # Step 4: Rank the exact matches (these are the main results)
-        all_matched = [listing for listing, _ in resolved.exact]
-
-        # Also include top related items if we don't have enough results
-        if len(all_matched) < 8:
-            related_listings = [
-                listing for listing, _ in resolved.related
-            ]
-            all_matched.extend(related_listings)
+        # Step 3: Narrow to top 30 cheapest before ranking so the scorer works on a manageable set
+        all_listings = sorted(
+            online_listings,
+            key=lambda l: (l.price if l.price > 0 else float("inf"))
+        )[:30]
 
         top_picks, rest = self.ranker.rank_with_price_normalization(
-            listings=all_matched,
+            listings=all_listings,
+            query=query,
             user_lat=lat,
             user_lon=lon,
         )
 
-        # Step 5: Format for the frontend
+        # Step 4: Format all results into clean dicts the frontend can consume directly
         return {
             "query": query,
             "top_picks": [self._format(r) for r in top_picks],
@@ -106,6 +97,7 @@ class SearchPipeline:
             "score": ranked.score,
             "reason": ranked.reason,
             "is_top_pick": ranked.is_top_pick,
+            "condition": l.condition,
         }
 
     def _format_local(self, listing: RawListing) -> dict:
@@ -117,4 +109,9 @@ class SearchPipeline:
             "rating": listing.rating,
             "review_count": listing.review_count,
             "source": listing.source,
+            "stock_confidence": listing.stock_confidence,
+            "stock_note": listing.stock_note,
+            "distance_km": listing.distance_km,
+            "maps_url": listing.url or None,
+            "place_id": listing.place_id,
         }
