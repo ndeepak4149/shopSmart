@@ -13,6 +13,7 @@ supabase==2.10.0
 
 # Search (used in analyze.py and review_aggregator.py)
 duckduckgo-search>=6.0.0
+ddgs>=0.1.0
 
 # Email alerts
 resend>=2.0.0

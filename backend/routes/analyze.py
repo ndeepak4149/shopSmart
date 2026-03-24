@@ -195,7 +195,10 @@ async def _resolve_seller_domain(seller: str) -> Optional[str]:
 
     try:
         def _ddg_homepage():
-            from ddgs import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
             with DDGS(verify=False) as ddgs:
                 return list(ddgs.text(f"{seller} official website", max_results=3))
 
@@ -308,7 +311,10 @@ async def _find_direct_url(title: str, seller: str) -> Optional[str]:
 
     try:
         def _ddg_search():
-            from ddgs import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
             # verify=False works around macOS LibreSSL TLS 1.3 handshake failures with DuckDuckGo
             with DDGS(verify=False) as ddgs:
                 return list(ddgs.text(query, max_results=8))

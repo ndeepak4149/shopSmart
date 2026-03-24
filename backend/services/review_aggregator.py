@@ -1,7 +1,10 @@
 import asyncio
 import httpx
 from typing import Optional
-from ddgs import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 
 
 class ReviewAggregator:
