@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { analyzeProduct, AnalyzeResponse } from "@/lib/api";
+import { analyzeProduct, AnalyzeResponse, Listing, LocalStore } from "@/lib/api";
 
 // ── Icon components — inline SVGs kept small and co-located with usage ──────────────────────
 const IconCheck = () => (
@@ -191,12 +191,42 @@ function PriceHistoryChart({ history, currentPrice }: { history: { day: number; 
   );
 }
 
-// ── Price alert widget — lets users set an email alert for a target price drop ──────────
-function PriceAlert({ price }: { price: number }) {
+// ── Price alert widget — sends a real email via Resend when the user sets a target price ──
+function PriceAlert({ price, productTitle, seller }: { price: number; productTitle: string; seller: string }) {
   const [enabled, setEnabled] = useState(false);
   const [email, setEmail] = useState("");
   const [target, setTarget] = useState(String(Math.floor(price * 0.9)));
   const [saved, setSaved] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(false);
+
+  const handleSetAlert = async () => {
+    if (!email || !target) return;
+    setSubmitting(true);
+    setSubmitError(false);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/v1/alerts`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email,
+            target_price: Number(target),
+            product_title: productTitle,
+            current_price: price,
+            seller,
+          }),
+        }
+      );
+      if (!res.ok) throw new Error("failed");
+      setSaved(true);
+    } catch {
+      setSubmitError(true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="bg-white rounded-2xl shadow-card border border-slate-100 p-6">
@@ -206,7 +236,7 @@ function PriceAlert({ price }: { price: number }) {
           <p className="text-sm text-slate-500 mt-0.5">Get notified when price drops</p>
         </div>
         <button
-          onClick={() => { setEnabled(!enabled); setSaved(false); }}
+          onClick={() => { setEnabled(!enabled); setSaved(false); setSubmitError(false); }}
           className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${enabled ? "bg-brand-600" : "bg-slate-200"}`}
         >
           <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${enabled ? "translate-x-7" : "translate-x-1"}`} />
@@ -237,18 +267,22 @@ function PriceAlert({ price }: { price: number }) {
               type="email"
             />
           </div>
+          {submitError && (
+            <p className="text-xs text-red-500">Something went wrong — check your email and try again.</p>
+          )}
           <button
-            onClick={() => { if (email) setSaved(true); }}
-            className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-xl text-sm transition-colors"
+            onClick={handleSetAlert}
+            disabled={submitting || !email}
+            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white font-semibold py-2.5 rounded-xl text-sm transition-colors"
           >
-            Set Alert
+            {submitting ? "Setting alert…" : "Set Alert"}
           </button>
         </div>
       )}
       {saved && (
         <div className="flex items-center gap-2 text-green-600 text-sm font-medium">
           <IconCheck />
-          Alert set! We&apos;ll email you at {email}
+          Alert set! Check your inbox at {email}
         </div>
       )}
     </div>
@@ -461,6 +495,185 @@ function PriceDisclaimer({ seller, source }: { seller: string; source: string })
   );
 }
 
+// ── Right time to buy? — computes a signal from the 90-day price history ────────────────────
+function BuySignal({ history, currentPrice }: { history: { day: number; price: number }[]; currentPrice: number }) {
+  if (!history.length || currentPrice <= 0) return null;
+
+  const prices = history.map(h => h.price);
+  const minPrice = Math.min(...prices);
+  const avgPrice = prices.reduce((s, p) => s + p, 0) / prices.length;
+
+  // compare last 14 days vs prior 14 to detect a downward trend
+  const recent = history.slice(0, 14).map(h => h.price);
+  const prior = history.slice(14, 28).map(h => h.price);
+  const recentAvg = recent.reduce((s, p) => s + p, 0) / (recent.length || 1);
+  const priorAvg = prior.reduce((s, p) => s + p, 0) / (prior.length || 1);
+  const trendingDown = priorAvg > recentAvg * 1.02;
+
+  let label: string;
+  let detail: string;
+  let colorClass: string;
+  let icon: string;
+
+  if (currentPrice <= minPrice * 1.03) {
+    label = "Near 90-day low";
+    detail = "This is close to the lowest price we've seen in the last 3 months — good time to buy.";
+    colorClass = "bg-green-50 border-green-200 text-green-800";
+    icon = "✓";
+  } else if (currentPrice <= avgPrice * 0.88) {
+    const pct = Math.round((1 - currentPrice / avgPrice) * 100);
+    label = "Good time to buy";
+    detail = `Price is ${pct}% below the 90-day average.`;
+    colorClass = "bg-green-50 border-green-200 text-green-800";
+    icon = "✓";
+  } else if (trendingDown && currentPrice >= avgPrice * 1.05) {
+    label = "Price trending down";
+    detail = "Price has been dropping recently — waiting a bit might save you money.";
+    colorClass = "bg-amber-50 border-amber-200 text-amber-800";
+    icon = "↓";
+  } else if (currentPrice >= avgPrice * 1.12) {
+    const pct = Math.round((currentPrice / avgPrice - 1) * 100);
+    label = "Price is higher than usual";
+    detail = `Currently ${pct}% above the 90-day average. Might be worth waiting for a dip.`;
+    colorClass = "bg-amber-50 border-amber-200 text-amber-800";
+    icon = "↑";
+  } else {
+    label = "Price looks typical";
+    detail = "Current price is in the normal range for this product.";
+    colorClass = "bg-slate-50 border-slate-200 text-slate-700";
+    icon = "~";
+  }
+
+  return (
+    <div className={`flex items-start gap-3 p-4 rounded-xl border ${colorClass}`}>
+      <span className="text-base font-bold flex-shrink-0 w-5 text-center">{icon}</span>
+      <div>
+        <p className="font-semibold text-sm">{label}</p>
+        <p className="text-xs mt-0.5 opacity-80 leading-relaxed">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Other sellers from the same search — read from localStorage cache ────────────────────
+function ComparisonPanel({ currentSeller, currentPrice, currentQuery }: { currentSeller: string; currentPrice: number; currentQuery: string }) {
+  const [alternatives, setAlternatives] = useState<Listing[]>([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("ss_last_results");
+      if (!raw) return;
+      const stored = JSON.parse(raw);
+      // bail if the cache is from a completely different search
+      if (currentQuery && stored.query && stored.query.toLowerCase() !== currentQuery.toLowerCase()) return;
+      const all: Listing[] = [...(stored.top_picks || []), ...(stored.other_results || [])];
+      const alts = all
+        .filter(l =>
+          l.seller_name.toLowerCase() !== currentSeller.toLowerCase() &&
+          l.price > 0 &&
+          currentPrice > 0 &&
+          Math.abs(l.price - currentPrice) / currentPrice <= 0.45
+        )
+        .slice(0, 4);
+      setAlternatives(alts);
+    } catch {}
+  }, [currentSeller, currentPrice, currentQuery]);
+
+  if (!alternatives.length) return null;
+
+  return (
+    <div className="bg-white rounded-2xl shadow-card border border-slate-100 p-6">
+      <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+        <span className="w-7 h-7 bg-blue-50 rounded-lg flex items-center justify-center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2">
+            <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+        </span>
+        Also Available At
+      </h3>
+      <div className="space-y-2">
+        {alternatives.map((alt) => {
+          const diff = alt.price - currentPrice;
+          const diffStr = diff > 0 ? `+$${diff.toFixed(2)}` : `-$${Math.abs(diff).toFixed(2)}`;
+          const diffColor = diff > 0 ? "text-red-500" : "text-green-600";
+          return (
+            <div key={alt.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-slate-800 truncate">{alt.seller_name}</p>
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                  {alt.rating && <span className="text-xs text-slate-500">⭐ {alt.rating.toFixed(1)}</span>}
+                  {alt.value_score > 0 && (
+                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+                      alt.value_score >= 75 ? "bg-green-50 text-green-700" :
+                      alt.value_score >= 55 ? "bg-blue-50 text-blue-700" :
+                      "bg-amber-50 text-amber-700"
+                    }`}>{alt.value_score}/100</span>
+                  )}
+                  {alt.condition && alt.condition !== "new" && (
+                    <span className="text-xs text-purple-600 capitalize">{alt.condition.replace("_", " ")}</span>
+                  )}
+                </div>
+              </div>
+              <div className="text-right ml-4 flex-shrink-0">
+                <p className="font-bold text-slate-900">${alt.price.toFixed(2)}</p>
+                <p className={`text-xs font-medium ${diffColor}`}>{diffStr} vs here</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-slate-400 mt-3 leading-relaxed">
+        From your search results. Prices may have changed — verify before buying.
+      </p>
+    </div>
+  );
+}
+
+// ── Nearest local store from the search — buy today, no shipping wait ────────────────────
+function LocalStoreCallout({ currentQuery }: { currentQuery: string }) {
+  const [store, setStore] = useState<LocalStore | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("ss_last_results");
+      if (!raw) return;
+      const stored = JSON.parse(raw);
+      if (currentQuery && stored.query && stored.query.toLowerCase() !== currentQuery.toLowerCase()) return;
+      const stores: LocalStore[] = stored.local_stores || [];
+      if (!stores.length) return;
+      const nearest = [...stores].sort((a, b) => (a.distance_km ?? 999) - (b.distance_km ?? 999))[0];
+      setStore(nearest);
+    } catch {}
+  }, [currentQuery]);
+
+  if (!store) return null;
+
+  const distMi = store.distance_km != null
+    ? `${(store.distance_km * 0.621371).toFixed(1)} mi away`
+    : "Nearby";
+
+  return (
+    <div className="bg-green-50 border border-green-100 rounded-2xl p-4 flex items-start gap-3">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
+      </svg>
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-green-800 text-sm truncate">{store.name}</p>
+        <p className="text-xs text-green-700 mt-0.5">{distMi} · Walk out with it today, no shipping wait</p>
+        {store.rating && (
+          <p className="text-xs text-slate-500 mt-1">⭐ {store.rating.toFixed(1)} rated</p>
+        )}
+      </div>
+      {store.maps_url && (
+        <a href={store.maps_url} target="_blank" rel="noopener noreferrer"
+          className="text-xs text-green-700 font-semibold hover:underline flex-shrink-0 mt-0.5">
+          Directions ↗
+        </a>
+      )}
+    </div>
+  );
+}
+
 // ── Main page — reads product params from the URL, calls /api/v1/analyze, and renders all cards ──
 function ProductContent() {
   const params = useSearchParams();
@@ -577,6 +790,9 @@ function ProductContent() {
             {/* 90-day price history area chart */}
             {data && <PriceHistoryChart history={data.price.price_history} currentPrice={price} />}
 
+            {/* right time to buy signal — computed from price history */}
+            {data && <BuySignal history={data.price.price_history} currentPrice={price} />}
+
             {/* Claude AI product analysis: verdict, pros/cons, who it's for, review highlights */}
             {loading && <SkeletonCard />}
             {data && <ProductAnalysisCard data={data.product_analysis} />}
@@ -584,6 +800,9 @@ function ProductContent() {
             {/* Claude AI seller analysis: trust score, strengths, watch-outs, shipping & returns */}
             {loading && <SkeletonCard />}
             {data && <SellerAnalysisCard data={data.seller_analysis} seller={seller} />}
+
+            {/* other sellers carrying the same product from the search results */}
+            <ComparisonPanel currentSeller={seller} currentPrice={price} currentQuery={query} />
           </div>
 
           {/* ── Right column (1/3): CTA button, price alert, quick stats, AI disclaimer ── */}
@@ -629,8 +848,11 @@ function ProductContent() {
               </div>
             )}
 
+            {/* nearest local store — walk out with it today */}
+            <LocalStoreCallout currentQuery={query} />
+
             {/* Price drop alert widget — only shown when a real price is available */}
-            {price > 0 && <PriceAlert price={price} />}
+            {price > 0 && <PriceAlert price={price} productTitle={title} seller={seller} />}
 
             {/* Quick stats panel: seller name, platform, trust level, value rating, extra fees */}
             <div className="bg-white rounded-2xl shadow-card border border-slate-100 p-5">

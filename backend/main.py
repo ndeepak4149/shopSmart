@@ -10,10 +10,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow the Next.js dev server on port 3000 to make cross-origin requests to this API
+# allow local dev + any Vercel preview/production URL
+_origins = ["http://localhost:3000"]
+if settings.app_env == "production":
+    _origins = ["*"]  # tighten this to your exact Vercel domain after first deploy
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,7 +35,8 @@ def health():
 
 
 # Register route modules — each adds its own endpoints under /api/v1
-from routes import search, analyze, place
+from routes import search, analyze, place, alerts
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(analyze.router, prefix="/api/v1")
 app.include_router(place.router, prefix="/api/v1")
+app.include_router(alerts.router, prefix="/api/v1")

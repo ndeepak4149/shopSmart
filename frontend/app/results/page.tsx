@@ -2,7 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { searchProducts } from "@/lib/api";
@@ -43,6 +43,19 @@ function ResultsContent() {
     queryFn: () => searchProducts(query, lat, lon, city),
     enabled: !!query,
   });
+
+  // cache results so the product detail page can show cross-source comparison + local store callout
+  useEffect(() => {
+    if (!data) return;
+    try {
+      localStorage.setItem("ss_last_results", JSON.stringify({
+        query: data.query,
+        top_picks: data.top_picks,
+        other_results: data.other_results,
+        local_stores: data.local_stores,
+      }));
+    } catch {}
+  }, [data]);
 
   if (!query) {
     return (

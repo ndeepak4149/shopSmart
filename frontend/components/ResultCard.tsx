@@ -101,7 +101,7 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
                 ) : null;
               })()}
             </div>
-            {/* Price display — shows 0 as 'Price in store' for local Google Places listings */}
+            {/* Price + value score */}
             <div className="text-right flex-shrink-0">
               {listing.price > 0 ? (
                 <>
@@ -110,6 +110,16 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
                 </>
               ) : (
                 <span className="text-sm text-slate-500 font-medium">Price in store</span>
+              )}
+              {listing.value_score > 0 && (
+                <span className={`mt-1 inline-block text-xs font-bold px-2 py-0.5 rounded-full ${
+                  listing.value_score >= 75 ? "bg-green-50 text-green-700" :
+                  listing.value_score >= 55 ? "bg-blue-50 text-blue-700" :
+                  listing.value_score >= 35 ? "bg-amber-50 text-amber-700" :
+                  "bg-red-50 text-red-600"
+                }`}>
+                  {listing.value_score}/100
+                </span>
               )}
             </div>
           </div>
@@ -137,14 +147,17 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
             )}
           </div>
 
-          {/* Ranking reason line — only shown for Top Picks so users understand why this result was selected */}
-          {listing.is_top_pick && listing.reason && (
-            <div className="mt-2 flex items-center gap-1 text-xs text-brand-600 font-medium">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          {/* For top picks show the human-readable explanation; for others show the signal tags */}
+          {listing.is_top_pick && listing.explanation && (
+            <div className="mt-2 flex items-start gap-1 text-xs text-brand-600 font-medium">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 mt-0.5">
                 <circle cx="12" cy="12" r="10"/><path d="M12 16v-4m0-4h.01"/>
               </svg>
-              {listing.reason}
+              {listing.explanation}
             </div>
+          )}
+          {!listing.is_top_pick && listing.reason && listing.reason !== "Good option" && (
+            <div className="mt-2 text-xs text-slate-400">{listing.reason}</div>
           )}
         </div>
       </div>

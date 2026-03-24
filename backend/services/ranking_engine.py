@@ -92,6 +92,8 @@ class RankedListing:
     rank: int
     reason: str
     is_top_pick: bool = False
+    value_score: int = 0
+    explanation: str = ""
 
 
 def _tokenize(text: str) -> set[str]:
@@ -159,6 +161,77 @@ def _review_score(review_count: Optional[int]) -> float:
     return min(math.log10(review_count) / 4.0, 1.0) * 0.10
 
 
+def _compute_value_score(listing: RawListing, min_price: float, max_price: float) -> int:
+    """0–100 score combining price, seller trust, rating, and reviews."""
+    score = 0.0
+
+    # Price competitiveness — cheapest listing gets full 35 pts
+    if listing._raw_price and listing._raw_price > 0 and max_price > min_price:
+        score += (1.0 - (listing._raw_price - min_price) / (max_price - min_price)) * 35
+    else:
+        score += 17
+
+    # Seller trust
+    trust_bonus, _ = _seller_trust_score(listing.seller_name)
+    if trust_bonus >= 0.12:
+        score += 25
+    elif trust_bonus == 0.0:
+        score += 15
+    elif trust_bonus > 0:
+        score += 12
+    else:
+        score += 5
+
+    # Rating (0–25 pts)
+    if listing.rating:
+        score += (listing.rating / 5.0) * 25
+
+    # Reviews — same log scale as _review_score but mapped to 15 pts
+    if listing.review_count and listing.review_count > 0:
+        score += min(math.log10(listing.review_count) / 4.0, 1.0) * 15
+
+    return min(100, max(0, int(score)))
+
+
+def _generate_explanation(
+    listing: RawListing,
+    total_count: int,
+    price_ratio: Optional[float],
+    is_cheapest: bool,
+) -> str:
+    """1-sentence human explanation for why a listing is a good pick."""
+    trust_bonus, _ = _seller_trust_score(listing.seller_name)
+    is_high_trust = trust_bonus >= 0.12
+
+    rating_str = f"{listing.rating:.1f}★" if listing.rating else None
+    reviews_str = f"{listing.review_count:,} reviews" if listing.review_count and listing.review_count >= 200 else None
+
+    cond_prefix = ""
+    if listing.condition and listing.condition != "new":
+        cond_map = {"refurbished": "Refurbished", "open_box": "Open box", "used": "Used", "parts": "Parts only"}
+        cond_prefix = cond_map.get(listing.condition, "") + " — "
+
+    if is_cheapest and total_count > 1 and is_high_trust:
+        return f"{cond_prefix}Lowest price across {total_count} results from a trusted retailer."
+    if is_cheapest and total_count > 1:
+        return f"{cond_prefix}Lowest price across {total_count} results."
+    if price_ratio and price_ratio <= 0.82:
+        savings = int((1 - price_ratio) * 100)
+        suffix = " from a trusted retailer" if is_high_trust else ""
+        return f"{cond_prefix}{savings}% below average price{suffix}."
+    if rating_str and reviews_str and is_high_trust:
+        return f"{cond_prefix}Trusted retailer — {rating_str} rating with {reviews_str}."
+    if rating_str and reviews_str:
+        return f"{cond_prefix}{rating_str} rating backed by {reviews_str}."
+    if is_high_trust and rating_str:
+        return f"{cond_prefix}Reliable retailer with a {rating_str} product rating."
+    if rating_str and listing.rating and listing.rating >= 4.3:
+        return f"{cond_prefix}Strong {rating_str} rating{(' with ' + reviews_str) if reviews_str else ''}."
+    if is_high_trust:
+        return f"{cond_prefix}Established retailer — generally reliable shopping experience."
+    return f"{cond_prefix}Competitive option based on price and availability."
+
+
 class RankingEngine:
     """
     Scores every listing across 7 signals:
@@ -201,10 +274,16 @@ class RankingEngine:
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
 
+        # Price range needed for value_score computation
+        prices = [l._raw_price for _, l, _, _, _, _ in scored if l._raw_price and l._raw_price > 0]
+        min_p = min(prices) if prices else 0.0
+        max_p = max(prices) if prices else 0.0
+        total_count = len(scored)
+
         # Build the two result buckets — keyword-irrelevant listings are demoted to the "rest" pile
         top_picks, rest = [], []
         rank = 1
-        for score, listing, reasons, is_relevant in scored:
+        for score, listing, reasons, is_relevant, price_ratio, is_cheapest in scored:
             reason_text = " · ".join(reasons) if reasons else "Good option"
             is_top = is_relevant and rank <= self.TOP_PICKS_COUNT
 
@@ -214,6 +293,8 @@ class RankingEngine:
                 rank=rank,
                 reason=reason_text,
                 is_top_pick=is_top,
+                value_score=_compute_value_score(listing, min_p, max_p),
+                explanation=_generate_explanation(listing, total_count, price_ratio, is_cheapest),
             )
 
             if is_top:
@@ -292,20 +373,18 @@ class RankingEngine:
     def _normalize_prices(
         self,
         scored: list[tuple[float, RawListing, list[str], bool]],
-    ) -> list[tuple[float, RawListing, list[str], bool]]:
+    ) -> list[tuple[float, RawListing, list[str], bool, Optional[float], bool]]:
         prices = [
             l._raw_price for _, l, _, _ in scored
             if l._raw_price and l._raw_price > 0
         ]
         if not prices:
-            return scored
+            return [(s, l, r, ir, None, False) for s, l, r, ir in scored]
 
         min_price = min(prices)
         max_price = max(prices)
         price_range = max_price - min_price or 1
 
-        # Use the interquartile median so extreme outliers don't drag the
-        # "normal" reference price up or down for the rest of the results.
         sorted_prices = sorted(prices)
         q1 = sorted_prices[len(sorted_prices) // 4]
         q3 = sorted_prices[(3 * len(sorted_prices)) // 4]
@@ -315,40 +394,34 @@ class RankingEngine:
 
         result = []
         for score, listing, reasons, is_relevant in scored:
+            price_ratio: Optional[float] = None
+            is_cheapest = False
+
             if listing._raw_price and listing._raw_price > 0:
                 p = listing._raw_price
-
-                # Map this listing's price onto a 0–0.25 scale where the cheapest listing scores highest
                 price_score = (1.0 - (p - min_price) / price_range) * 0.25
                 adjusted = score - 0.125 + price_score
+                is_cheapest = (p == min_price and len(prices) > 1)
 
                 if median_price > 0:
-                    ratio = p / median_price
+                    price_ratio = p / median_price
 
-                    if ratio < 0.25:
-                        # Price is less than 25% of the median — almost certainly a different product
-                        # (accessory, digital code, part) — hard-exclude from Top Picks.
+                    if price_ratio < 0.25:
                         is_relevant = False
                         adjusted -= 0.20
                         reasons = ["⚠ Price inconsistent with search"] + reasons
-
-                    elif ratio < 0.50:
-                        # Suspiciously low but not impossible (clearance, open-box, refurb)
-                        # — penalise heavily to push it down without hard-excluding
+                    elif price_ratio < 0.50:
                         adjusted -= 0.12
                         reasons = ["Verify: unusually low price"] + reasons
-
-                    elif ratio <= 0.80:
-                        savings_pct = int((1 - ratio) * 100)
+                    elif price_ratio <= 0.80:
+                        savings_pct = int((1 - price_ratio) * 100)
                         adjusted += 0.05
                         reasons = [f"Great deal ({savings_pct}% below avg)"] + reasons
-
-                    elif p == min_price and len(prices) > 1:
+                    elif is_cheapest:
                         reasons = ["Best price"] + reasons
-
             else:
                 adjusted = score
 
-            result.append((adjusted, listing, reasons, is_relevant))
+            result.append((adjusted, listing, reasons, is_relevant, price_ratio, is_cheapest))
 
         return result

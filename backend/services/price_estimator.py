@@ -53,6 +53,8 @@ class PriceEstimator:
         source: str,
         seller: str = "",
         is_local: bool = False,
+        title: str = "",
+        **kwargs,
     ) -> dict:
         """
         Returns estimated final price with full breakdown.
@@ -79,6 +81,10 @@ class PriceEstimator:
             confidence = "Low"
 
         seller_label = seller if seller else source
+
+        # try to get real price history first; fall back to synthetic if not enough data yet
+        price_history = await self._get_price_history(title, seller, base_price)
+
         return {
             "listed_price": base_price,
             "estimated_shipping": round(shipping, 2),
@@ -86,7 +92,7 @@ class PriceEstimator:
             "estimated_final": estimated_final,
             "confidence": confidence,
             "savings_vs_estimate": round(estimated_final - base_price, 2),
-            "price_history": self._generate_price_history(base_price),
+            "price_history": price_history,
             "data_note": profile.get(
                 "note",
                 f"Estimated using {seller_label} fee patterns. Includes shipping, platform fees, and sales tax."
@@ -234,6 +240,53 @@ Respond ONLY with a JSON object — no markdown, no explanation.
         )
         model.fit(np.array(X), np.array(y))
         return model
+
+    # ── Price history — real data from Supabase, synthetic fallback ──────────────────────
+
+    async def _get_price_history(self, title: str, seller: str, current_price: float) -> list[dict]:
+        """
+        Store the current price then fetch the last 90 days of snapshots from Supabase.
+        Falls back to synthetic data if Supabase isn't set up or there's not enough history yet.
+        """
+        try:
+            from services.database import get_db
+            from datetime import datetime, timedelta
+
+            product_key = title.lower().strip()[:200] if title else seller.lower().strip()
+            if not product_key:
+                return self._generate_price_history(current_price)
+
+            db = get_db()
+
+            # record this view as a price snapshot
+            db.table("price_snapshots").insert({
+                "product_key": product_key,
+                "seller_name": seller.lower().strip() or "unknown",
+                "source": "analyze",
+                "price": current_price,
+            }).execute()
+
+            # pull up to 90 days of history back
+            cutoff = (datetime.utcnow() - timedelta(days=90)).isoformat()
+            result = db.table("price_snapshots") \
+                .select("price, recorded_at") \
+                .eq("product_key", product_key) \
+                .gte("recorded_at", cutoff) \
+                .order("recorded_at", desc=True) \
+                .limit(90) \
+                .execute()
+
+            rows = result.data or []
+            # need at least 5 real data points to show a meaningful chart
+            if len(rows) >= 5:
+                history = [{"day": i, "price": float(r["price"])} for i, r in enumerate(rows)]
+                history[0]["price"] = current_price  # ensure today's price is exact
+                return history
+
+        except Exception as e:
+            print(f"[PriceHistory] Supabase unavailable, using synthetic: {e}")
+
+        return self._generate_price_history(current_price)
 
     # ── Utilities — price history simulation and holiday proximity for seasonal context ───
 

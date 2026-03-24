@@ -417,6 +417,7 @@ async def analyze_product(req: AnalyzeRequest):
             source=req.source,
             seller=req.seller,
             is_local=req.source == "google_places",
+            title=req.title,
         ),
         get_review_aggregator().get_reviews(
             product=req.title,

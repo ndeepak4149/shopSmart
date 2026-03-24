@@ -98,6 +98,8 @@ class SearchPipeline:
             "reason": ranked.reason,
             "is_top_pick": ranked.is_top_pick,
             "condition": l.condition,
+            "value_score": ranked.value_score,
+            "explanation": ranked.explanation,
         }
 
     def _format_local(self, listing: RawListing) -> dict:

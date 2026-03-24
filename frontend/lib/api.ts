@@ -20,6 +20,8 @@ export interface Listing {
   reason: string;
   is_top_pick: boolean;
   condition: "new" | "refurbished" | "open_box" | "used" | "parts";
+  value_score: number;
+  explanation: string;
 }
 
 export interface LocalStore {
