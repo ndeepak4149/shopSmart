@@ -408,7 +408,7 @@ class DiscoveryAgent:
                 with DDGS() as ddgs:
                     return list(ddgs.text(search_query, max_results=12))
 
-            results = await asyncio.to_thread(_search)
+            results = await asyncio.wait_for(asyncio.to_thread(_search), timeout=8.0)
             if not results:
                 return []
 
@@ -420,7 +420,7 @@ class DiscoveryAgent:
             import anthropic
             client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-            message = await asyncio.to_thread(
+            message = await asyncio.wait_for(asyncio.to_thread(
                 client.messages.create,
                 model="claude-haiku-4-5-20251001",
                 max_tokens=400,
@@ -435,7 +435,7 @@ class DiscoveryAgent:
                     f'If none are legitimate, return [].\n\n'
                     f'Results:\n' + '\n'.join(summaries)
                 )}],
-            )
+            ), timeout=12.0)
 
             text = message.content[0].text.strip()
             if text.startswith("```"):
