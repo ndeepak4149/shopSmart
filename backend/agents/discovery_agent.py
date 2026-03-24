@@ -407,6 +407,63 @@ class DiscoveryAgent:
                 params = {"pagetoken": token, "key": self.google_key}
         return all_places
 
+    def _filter_stores_sync(self, query: str, places: list[dict]) -> list[dict]:
+        """
+        Calls Claude Haiku with the full list of nearby stores and asks which ones
+        would likely carry the searched product. Returns the relevant subset.
+        Falls through to the full list if Claude is unavailable.
+        """
+        if not places:
+            return places
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+            lines = []
+            for i, p in enumerate(places):
+                types_str = ", ".join(p.get("types", [])[:4])
+                lines.append(f"{i}. {p.get('name', 'Store')} (types: {types_str})")
+            store_list = "\n".join(lines)
+
+            message = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=150,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"A user searched for \"{query}\".\n"
+                        f"Which of these nearby stores would realistically carry this product?\n"
+                        f"Reply with only the index numbers of relevant stores, comma-separated. "
+                        f"Example: \"0,2,4\"\n\n"
+                        f"Stores:\n{store_list}"
+                    )
+                }]
+            )
+
+            raw = message.content[0].text.strip()
+            indices: set[int] = set()
+            for part in raw.split(","):
+                part = part.strip()
+                if part.isdigit():
+                    idx = int(part)
+                    if 0 <= idx < len(places):
+                        indices.add(idx)
+
+            if not indices:
+                return places  # Claude returned nothing parseable — keep all
+
+            relevant = [places[i] for i in sorted(indices)]
+            print(f"[StoreFilter] '{query}': {len(places)} → {len(relevant)} relevant stores")
+            return relevant
+
+        except Exception as e:
+            print(f"[StoreFilter] Claude unavailable, keeping all stores: {e}")
+            return places
+
+    async def _filter_relevant_stores(self, query: str, places: list[dict]) -> list[dict]:
+        """Async wrapper — runs the sync Claude filter in a thread."""
+        return await asyncio.to_thread(self._filter_stores_sync, query, places)
+
     async def _google_places_search(
         self, query: str, lat: float, lon: float
     ) -> list[RawListing]:
@@ -417,7 +474,7 @@ class DiscoveryAgent:
         - Uses Nearby Search with rankby=distance (no hard radius cap)
         - Paginates up to 60 results per store type
         - Deduplicates by Google place_id
-        - Filters to ≤ 80 km and returns up to 30 stores sorted by distance
+        - Filters to ≤ 80 km, checks product relevance with Claude, returns up to 30 stores
         """
         RADIUS_KM = 80.46  # 50 miles in km
 
@@ -430,9 +487,9 @@ class DiscoveryAgent:
             return_exceptions=True,
         )
 
-        # Deduplicate by place_id, filter to 50-mile radius
+        # Collect deduplicated valid places (within radius, passes basic retailer check)
         seen_ids: set[str] = set()
-        listings: list[RawListing] = []
+        valid_places: list[dict] = []
 
         for result in raw_results:
             if isinstance(result, Exception):
@@ -451,31 +508,44 @@ class DiscoveryAgent:
 
                 dist = self._haversine_km(lat, lon, slat, slon)
                 if dist > RADIUS_KM:
-                    continue  # beyond the 50-mile service radius — skip
+                    continue
 
                 if not self._is_likely_retailer(place):
-                    continue  # skip repair shops, restaurants, etc.
+                    continue
 
-                store_name = place.get("name", "Local Store")
-                confidence, note = self._score_confidence(store_name, query, place)
+                place["_dist_km"] = dist  # stash computed distance
+                valid_places.append(place)
 
-                listings.append(RawListing(
-                    title=f"{store_name} — {query}",
-                    price=0.0,
-                    url=f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "",
-                    seller_name=store_name,
-                    source="google_places",
-                    is_local=True,
-                    lat=slat,
-                    lon=slon,
-                    rating=place.get("rating"),
-                    review_count=place.get("user_ratings_total"),
-                    in_stock=True,
-                    stock_confidence=confidence,
-                    stock_note=note,
-                    place_id=pid,
-                    distance_km=round(dist, 2),
-                ))
+        # Ask Claude which of these stores would actually carry the product
+        relevant_places = await self._filter_relevant_stores(query, valid_places)
+
+        # Build RawListings from the filtered set
+        listings: list[RawListing] = []
+        for place in relevant_places:
+            pid = place.get("place_id", "")
+            loc = place.get("geometry", {}).get("location", {})
+            slat, slon = loc.get("lat"), loc.get("lng")
+            dist = place.get("_dist_km", 0.0)
+            store_name = place.get("name", "Local Store")
+            confidence, note = self._score_confidence(store_name, query, place)
+
+            listings.append(RawListing(
+                title=f"{store_name} — {query}",
+                price=0.0,
+                url=f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "",
+                seller_name=store_name,
+                source="google_places",
+                is_local=True,
+                lat=slat,
+                lon=slon,
+                rating=place.get("rating"),
+                review_count=place.get("user_ratings_total"),
+                in_stock=True,
+                stock_confidence=confidence,
+                stock_note=note,
+                place_id=pid,
+                distance_km=round(dist, 2),
+            ))
 
         # Sort by straight-line distance and cap at 30 stores to keep the map readable
         listings.sort(key=lambda l: l.distance_km or 999)
@@ -590,7 +660,7 @@ class DiscoveryAgent:
         )
 
         seen_ids: set[str] = set()
-        listings = []
+        valid_places: list[dict] = []
         for result in raw_results:
             if isinstance(result, Exception):
                 continue
@@ -610,26 +680,36 @@ class DiscoveryAgent:
                     if not self._is_likely_retailer(place):
                         continue
 
-                    store_name = place.get("name", "Local Store")
-                    confidence, note = self._score_confidence(store_name, query, place)
-                    listings.append(RawListing(
-                        title=f"{store_name} — {query}",
-                        price=0.0,
-                        url=f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "",
-                        seller_name=store_name,
-                        source="google_places",
-                        is_local=True,
-                        lat=slat,
-                        lon=slon,
-                        rating=place.get("rating"),
-                        review_count=place.get("user_ratings_total"),
-                        in_stock=True,
-                        stock_confidence=confidence,
-                        stock_note=note,
-                        place_id=pid,
-                    ))
+                    valid_places.append(place)
                 except (ValueError, TypeError):
                     continue
+
+        # Ask Claude which of these stores would actually carry the product
+        relevant_places = await self._filter_relevant_stores(query, valid_places)
+
+        listings = []
+        for place in relevant_places:
+            pid = place.get("place_id", "")
+            location = place.get("geometry", {}).get("location", {})
+            slat, slon = location.get("lat"), location.get("lng")
+            store_name = place.get("name", "Local Store")
+            confidence, note = self._score_confidence(store_name, query, place)
+            listings.append(RawListing(
+                title=f"{store_name} — {query}",
+                price=0.0,
+                url=f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "",
+                seller_name=store_name,
+                source="google_places",
+                is_local=True,
+                lat=slat,
+                lon=slon,
+                rating=place.get("rating"),
+                review_count=place.get("user_ratings_total"),
+                in_stock=True,
+                stock_confidence=confidence,
+                stock_note=note,
+                place_id=pid,
+            ))
 
         print(f"[Google Places] {len(listings)} local stores found (city search)")
         return listings
