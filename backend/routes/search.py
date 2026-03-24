@@ -32,5 +32,7 @@ async def search_products(
         )
         return results
     except Exception as e:
+        import traceback
         print(f"[Search Route] Error: {e}")
-        raise HTTPException(status_code=500, detail="Search failed. Please try again.")
+        print(f"[Search Route] Traceback:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
