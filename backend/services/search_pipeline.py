@@ -100,6 +100,7 @@ class SearchPipeline:
             "condition": l.condition,
             "value_score": ranked.value_score,
             "explanation": ranked.explanation,
+            "price_verified": l.price_verified,
         }
 
     def _format_local(self, listing: RawListing) -> dict:

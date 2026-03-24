@@ -22,6 +22,7 @@ export interface Listing {
   condition: "new" | "refurbished" | "open_box" | "used" | "parts";
   value_score: number;
   explanation: string;
+  price_verified: boolean;
 }
 
 export interface LocalStore {

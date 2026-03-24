@@ -21,6 +21,7 @@ const SOURCE_LABELS: Record<string, string> = {
   ebay: "eBay",
   google_places: "Local Store",
   google_shopping: "Google Shopping",
+  web_discovery: "Web Find",
   web: "Web",
 };
 
@@ -29,6 +30,7 @@ const SOURCE_COLORS: Record<string, string> = {
   ebay: "bg-amber-50 text-amber-700",
   google_places: "bg-green-50 text-green-700",
   google_shopping: "bg-sky-50 text-sky-700",
+  web_discovery: "bg-slate-100 text-slate-600",
   web: "bg-slate-100 text-slate-600",
 };
 
@@ -108,6 +110,8 @@ export default function ResultCard({ listing, query }: ResultCardProps) {
                   <span className="text-xl font-bold text-slate-900">${listing.price.toFixed(2)}</span>
                   <p className="text-xs text-slate-400 mt-0.5">Price may vary</p>
                 </>
+              ) : listing.price_verified === false ? (
+                <span className="text-sm text-slate-500 font-medium">Visit site for price</span>
               ) : (
                 <span className="text-sm text-slate-500 font-medium">Price in store</span>
               )}

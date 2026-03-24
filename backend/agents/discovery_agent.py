@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import httpx
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ class RawListing:
     place_id: Optional[str] = None     # Google Places unique ID — used to deduplicate stores across multiple nearby searches
     distance_km: Optional[float] = None  # straight-line Haversine distance from the user's location in km
     condition: str = "new"             # 'new', 'refurbished', 'open_box', 'used', 'parts'
+    price_verified: bool = True        # False for web-discovered sellers where price is unknown
 
 
 def detect_condition(title: str) -> str:
@@ -75,6 +77,7 @@ class DiscoveryAgent:
     def __init__(self):
         self.channel3_key = settings.channel3_api_key
         self.ebay_app_id = settings.ebay_app_id
+        self.ebay_client_id = settings.ebay_client_id
         self.google_key = settings.google_places_api_key
         self.serpapi_key = settings.serpapi_key
 
@@ -88,28 +91,37 @@ class DiscoveryAgent:
         """
         Main entry point. Runs all sources in parallel.
         Returns a flat list of all raw listings found.
+
+        Sources:
+        - Channel3: primary structured API (Amazon, BestBuy, niche sellers)
+        - SerpAPI: Google Shopping results
+        - eBay: used/refurbished market via Browse API (requires credentials)
+        - Web Discovery: DuckDuckGo organic search for long-tail sellers
+        - Google Places: physical stores within 50 miles (when location given)
         """
-        tasks = [
-            self._channel3_search(query),
-            self._serpapi_shopping_search(query),
+        tasks: list[tuple[str, object]] = [
+            ("Channel3", self._channel3_search(query)),
+            ("SerpAPI", self._serpapi_shopping_search(query)),
+            ("WebDiscovery", self._web_discovery_search(query)),
         ]
 
-        # Only search local stores if we have a location
+        # eBay: only run if credentials are configured
+        if self.ebay_client_id:
+            tasks.append(("eBay", self._ebay_search(query)))
+
+        # Local stores: only run if we have a location
         if lat and lon:
-            tasks.append(self._google_places_search(query, lat, lon))
+            tasks.append(("Google Places", self._google_places_search(query, lat, lon)))
         elif city:
-            tasks.append(self._google_places_search_by_city(query, city))
+            tasks.append(("Google Places", self._google_places_search_by_city(query, city)))
 
-        # Run all tasks at the same time, don't crash if one fails
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        task_names = [t[0] for t in tasks]
+        results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
 
-        # Flatten all results into one list, skip any that errored
         all_listings = []
-        source_names = ["Channel3", "SerpAPI", "Google Places"]
-        for i, result in enumerate(results):
-            source = source_names[i] if i < len(source_names) else "Unknown"
+        for name, result in zip(task_names, results):
             if isinstance(result, Exception):
-                print(f"[Discovery] {source} failed: {result}")
+                print(f"[Discovery] {name} failed: {result}")
                 continue
             if isinstance(result, list):
                 all_listings.extend(result)
@@ -275,6 +287,183 @@ class DiscoveryAgent:
                 item["best_url"] = f"https://www.google.com/search?q={search_q}"
 
         return items
+
+    # ── eBay Browse API ───────────────────────────────────────────────────
+
+    async def _ebay_search(self, query: str) -> list[RawListing]:
+        """
+        eBay Browse API — covers used, refurbished, and fixed-price marketplace listings.
+        Free tier: 5,000 calls/day.
+
+        Requires eBay developer account (developer.ebay.com):
+        1. Create a production application
+        2. Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in .env and Railway env vars
+        """
+        from services.ebay_auth import EbayAuth
+
+        token = await EbayAuth.get_token()
+        if not token:
+            return []
+
+        async def _fetch(auth_token: str) -> dict:
+            async with httpx.AsyncClient(timeout=15) as client:
+                return await client.get(
+                    "https://api.ebay.com/buy/browse/v1/item_summary/search",
+                    params={
+                        "q": query,
+                        "filter": "buyingOptions:{FIXED_PRICE}",
+                        "sort": "price",
+                        "limit": 20,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {auth_token}",
+                        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+                    },
+                )
+
+        try:
+            resp = await _fetch(token)
+
+            if resp.status_code == 401:
+                # Token expired mid-flight — clear and retry once
+                EbayAuth._token = None
+                token = await EbayAuth.get_token()
+                if not token:
+                    return []
+                resp = await _fetch(token)
+
+            if resp.status_code != 200:
+                print(f"[eBay] API error: {resp.status_code}")
+                return []
+
+            data = resp.json()
+            listings = []
+
+            for item in data.get("itemSummaries", []):
+                price = float(item.get("price", {}).get("value", 0))
+                if price <= 0:
+                    continue
+
+                shipping_cost = 0.0
+                shipping_opts = item.get("shippingOptions", [])
+                if shipping_opts:
+                    try:
+                        shipping_cost = float(shipping_opts[0].get("shippingCost", {}).get("value", "0"))
+                    except (ValueError, TypeError):
+                        shipping_cost = 0.0
+
+                condition_raw = item.get("condition", "New").lower()
+                if "refurb" in condition_raw or "renewed" in condition_raw:
+                    condition = "refurbished"
+                elif "open" in condition_raw:
+                    condition = "open_box"
+                elif "used" in condition_raw or "pre-owned" in condition_raw:
+                    condition = "used"
+                else:
+                    condition = "new"
+
+                thumbnail_images = item.get("thumbnailImages") or []
+                thumbnail = thumbnail_images[0].get("imageUrl") if thumbnail_images else None
+
+                listings.append(RawListing(
+                    title=item.get("title", query),
+                    price=round(price + shipping_cost, 2),
+                    url=item.get("itemWebUrl", ""),
+                    seller_name=item.get("seller", {}).get("username", "eBay Seller"),
+                    source="ebay",
+                    image_url=thumbnail,
+                    in_stock=True,
+                    shipping_info=f"${shipping_cost:.2f} shipping" if shipping_cost > 0 else "Free shipping",
+                    condition=condition,
+                    price_verified=True,
+                ))
+
+            print(f"[eBay] {len(listings)} listings found")
+            return listings
+
+        except Exception as e:
+            print(f"[eBay] Failed: {e}")
+            return []
+
+    # ── DuckDuckGo Web Discovery ──────────────────────────────────────────
+
+    async def _web_discovery_search(self, query: str) -> list[RawListing]:
+        """
+        DuckDuckGo organic search for online sellers not covered by Channel3 or SerpAPI.
+        Claude Haiku identifies legitimate seller pages — NO price estimation.
+
+        Returned listings have price=0.0 and price_verified=False.
+        They appear in results with "Visit site for price" instead of a dollar amount.
+        They are NOT included in price-based ranking signals.
+        """
+        exclude = "amazon walmart bestbuy target ebay"
+        search_query = f'"{query}" buy -{exclude}'
+
+        try:
+            def _search():
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    return list(ddgs.text(search_query, max_results=12))
+
+            results = await asyncio.to_thread(_search)
+            if not results:
+                return []
+
+            summaries = [
+                f"{i}. {r.get('title', '')} | {r.get('href', '')} | {r.get('body', '')[:150]}"
+                for i, r in enumerate(results[:12])
+            ]
+
+            import anthropic
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+            message = await asyncio.to_thread(
+                client.messages.create,
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{"role": "user", "content": (
+                    f'Product: "{query}"\n\n'
+                    f'Which of these search results are LEGITIMATE online stores where you can BUY this product?\n\n'
+                    f'Reply with a JSON array. For each legitimate store include:\n'
+                    f'- index (the result number)\n'
+                    f'- seller_name (the store name)\n'
+                    f'- is_trustworthy (true if it appears to be a real, established retailer)\n\n'
+                    f'DO NOT estimate prices. Skip blogs, reviews, news, forums.\n'
+                    f'If none are legitimate, return [].\n\n'
+                    f'Results:\n' + '\n'.join(summaries)
+                )}],
+            )
+
+            text = message.content[0].text.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            evaluated = json.loads(text.strip())
+
+            listings = []
+            for item in evaluated:
+                idx = item.get("index", -1)
+                if 0 <= idx < len(results) and item.get("is_trustworthy", False):
+                    listings.append(RawListing(
+                        title=query,
+                        price=0.0,
+                        url=results[idx].get("href", ""),
+                        seller_name=item.get("seller_name", "Online Store"),
+                        source="web_discovery",
+                        in_stock=True,
+                        price_verified=False,
+                    ))
+
+            print(f"[WebDiscovery] {len(listings)} sellers found")
+            return listings
+
+        except Exception as e:
+            print(f"[WebDiscovery] Failed: {e}")
+            return []
 
     # ── Google Places (local stores) ──────────────────────────────────────
 

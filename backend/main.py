@@ -10,10 +10,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# allow local dev + any Vercel preview/production URL
-_origins = ["http://localhost:3000"]
+# In production, lock CORS to the exact Vercel domain set in FRONTEND_URL env var.
+# Falls back to "*" only if FRONTEND_URL is not configured yet.
 if settings.app_env == "production":
-    _origins = ["*"]  # tighten this to your exact Vercel domain after first deploy
+    _origins = [settings.frontend_url] if settings.frontend_url else ["*"]
+else:
+    _origins = ["http://localhost:3000"]
 
 app.add_middleware(
     CORSMiddleware,
