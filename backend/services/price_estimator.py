@@ -1,10 +1,8 @@
 import json
 import re
-import numpy as np
-from typing import Optional
-from datetime import datetime
+import math
 import random
-from sklearn.ensemble import GradientBoostingRegressor
+from typing import Optional
 
 
 # Hardcoded fee profiles used when the seller matches a known platform or as a last-resort fallback
@@ -28,24 +26,15 @@ class PriceEstimator:
     """
     Estimates the true final price a buyer pays for any seller.
 
-    How it works:
-    1. Ask Claude AI what the typical shipping, fees, and taxes are for THIS specific seller
-       (works for ANY retailer — Target, B&H Photo, Etsy shops, local merchants, etc.)
-    2. Feed those values into a GradientBoosting model trained on realistic transaction patterns
-    3. Return a breakdown: listed price + shipping + platform fees + taxes = estimated final
-
+    Asks Claude for seller-specific fee profiles (shipping, platform fees, tax),
+    then applies them directly to compute the estimated final price.
     Seller profiles are cached in memory so Claude is only asked once per seller.
     """
 
-    _model = None               # GradientBoosting model — trained once at startup and shared across all requests
-    _seller_cache: dict = {}    # seller name → fee profile; cached per process so Claude is only called once per seller
+    _seller_cache: dict = {}
 
     def __init__(self):
-        if PriceEstimator._model is None:
-            print("[PriceEstimator] Training model on seller fee patterns...")
-            PriceEstimator._model = self._train_model()
-            print("[PriceEstimator] Model ready")
-        self.model = PriceEstimator._model
+        pass
 
     async def estimate(
         self,
@@ -62,14 +51,10 @@ class PriceEstimator:
         """
         profile = await self._get_seller_profile(seller=seller, source=source)
 
-        features = self._build_features(base_price, source, is_local, profile)
-        fee_gap = float(self.model.predict([features])[0])
-        fee_gap = max(0, fee_gap)
-
-        # Decompose the total fee gap into shipping and other fees using the seller's known fee/shipping ratio
-        total_non_shipping = base_price * profile["fee_pct"] + base_price * profile["tax_rate"]
-        shipping = 0.0 if is_local else max(0, fee_gap - total_non_shipping)
-        hidden_fees = max(0, fee_gap - shipping)
+        # direct formula: shipping + platform fee + sales tax + small noise
+        shipping = 0.0 if is_local else max(0, random.gauss(profile["avg_shipping"], profile.get("shipping_std", 3.0)))
+        hidden_fees = base_price * profile["fee_pct"] + base_price * profile["tax_rate"]
+        fee_gap = shipping + hidden_fees
         estimated_final = round(base_price + fee_gap, 2)
 
         accuracy = profile["accuracy"]
@@ -183,64 +168,6 @@ Respond ONLY with a JSON object — no markdown, no explanation.
 
         return None
 
-    # ── ML model — trained on synthetic transactions to predict total hidden fees ─────────
-
-    def _build_features(self, base_price, source, is_local, profile):
-        now = datetime.now()
-        return [
-            base_price,
-            profile["avg_shipping"],
-            profile["fee_pct"],
-            profile["tax_rate"],
-            profile["accuracy"],
-            now.weekday(),
-            self._days_to_next_holiday(now),
-            1 if is_local else 0,
-            np.log1p(base_price),
-            base_price * profile["fee_pct"],
-            base_price * profile["tax_rate"],
-            0.0 if is_local else profile["avg_shipping"],
-        ]
-
-    def _train_model(self) -> GradientBoostingRegressor:
-        """
-        Train on 10000 synthetic transactions covering a wide range of sellers.
-        Each transaction simulates: shipping + platform fee + sales tax + noise.
-        """
-        random.seed(42)
-        np.random.seed(42)
-
-        profiles = list(_PLATFORM_DEFAULTS.values())
-        X, y = [], []
-
-        for _ in range(10000):
-            profile = random.choice(profiles)
-            base_price = random.uniform(3, 3000)
-            is_local = profile["avg_shipping"] == 0 and profile["fee_pct"] == 0
-
-            features = self._build_features(base_price, "synthetic", is_local, profile)
-
-            shipping = 0.0 if is_local else max(
-                0, random.gauss(profile["avg_shipping"], profile.get("shipping_std", 3.0))
-            )
-            platform_fee = base_price * profile["fee_pct"]
-            # Vary tax rate across the realistic US state range (4% low-tax states to 10.5% high-tax)
-            tax = base_price * random.uniform(0.04, 0.105)
-            noise = random.gauss(0, 1.0)
-            true_gap = max(0, shipping + platform_fee + tax + noise)
-
-            X.append(features)
-            y.append(true_gap)
-
-        model = GradientBoostingRegressor(
-            n_estimators=300,
-            learning_rate=0.05,
-            max_depth=4,
-            random_state=42,
-        )
-        model.fit(np.array(X), np.array(y))
-        return model
-
     # ── Price history — real data from Supabase, synthetic fallback ──────────────────────
 
     async def _get_price_history(self, title: str, seller: str, current_price: float) -> list[dict]:
@@ -300,17 +227,3 @@ Respond ONLY with a JSON object — no markdown, no explanation.
         history[-1]["price"] = current_price
         return history
 
-    def _days_to_next_holiday(self, now: datetime) -> int:
-        holidays = [
-            datetime(now.year, 11, 29),  # Black Friday
-            datetime(now.year, 12, 25),  # Christmas
-            datetime(now.year, 7, 4),    # July 4th
-            datetime(now.year, 11, 11),  # Veterans Day
-        ]
-        days = []
-        for h in holidays:
-            diff = (h - now).days
-            if diff < 0:
-                diff += 365
-            days.append(diff)
-        return min(days)
