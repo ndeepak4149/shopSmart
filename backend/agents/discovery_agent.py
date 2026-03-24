@@ -102,7 +102,8 @@ class DiscoveryAgent:
         tasks: list[tuple[str, object]] = [
             ("Channel3", self._channel3_search(query)),
             ("SerpAPI", self._serpapi_shopping_search(query)),
-            ("WebDiscovery", self._web_discovery_search(query)),
+            # WebDiscovery disabled: DuckDuckGo often blocks cloud IPs — re-enable once a proxy solution is in place
+            # ("WebDiscovery", self._web_discovery_search(query)),
         ]
 
         # eBay: only run if credentials are configured
