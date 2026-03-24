@@ -13,6 +13,17 @@ def get_pipeline():
     return _pipeline
 
 
+@router.get("/debug-search")
+async def debug_search(q: str = Query(default="yoga mat")):
+    """Temporary debug endpoint — returns raw error instead of 500."""
+    import traceback
+    try:
+        results = await get_pipeline().search(query=q.strip())
+        return {"status": "ok", "total": results.get("total_found", 0)}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
 @router.get("/search")
 async def search_products(
     q: str = Query(..., description="Product search query", min_length=1),
